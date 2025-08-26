@@ -1,6 +1,7 @@
-pyTelegramBotAPI
-python-aliexpress-api
-requests
-Flask
-gunicorn
-```    **ملاحظة هامة:** المكتبة التي نستخدمها اسمها `python-aliexpress-api` وليس `aliexpress_api`.
+ ```text
+    pyTelegramBotAPI
+    python-aliexpress-api
+    requests
+    Flask
+    gunicorn
+    ```
