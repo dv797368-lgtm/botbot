@@ -1,4 +1,5 @@
-flask
-requests
-gunicorn
 pyTelegramBotAPI
+python-aliexpress-api
+requests
+Flask
+gunicorn
