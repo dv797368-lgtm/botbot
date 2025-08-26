@@ -16,9 +16,9 @@ SHIP_TO_COUNTRY = os.getenv("SHIP_TO_COUNTRY", "DZ")
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# ====== دالة توليد التوقيع ======
+# ====== دالة توليد التوقيع (signature) ======
 def sign_request(params, secret):
-    sorted_params = sorted(params.items(), key=lambda x: x[0])
+    sorted_params = sorted(params.items(), key=lambda x: x[0])  # ترتيب البارامترات
     query = "".join([f"{k}{v}" for k, v in sorted_params])
     query = secret + query + secret
     return hmac.new(secret.encode("utf-8"), query.encode("utf-8"), hashlib.md5).hexdigest().upper()
@@ -59,24 +59,17 @@ def handle_message(message):
     except Exception as e:
         bot.reply_to(message, f"❌ صار خطأ: {e}")
 
-# ====== Webhook Routes ======
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"message": "🤖 البوت شغال على Render!"})
-
+# ====== Flask Webhook ======
 @app.route("/webhook", methods=["POST"])
 def webhook():
     update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
     bot.process_new_updates([update])
-    return "OK", 200
+    return "OK", 200   # ✅ لازم يرجع 200 للـ Telegram
 
-# ====== تسجيل الـ Webhook ======
-def set_webhook():
-    webhook_url = "https://your-app.onrender.com/webhook"  # 🔴 بدّلها برابط Render تاعك
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
-    response = requests.get(url, params={"url": webhook_url})
-    print(response.json())
+@app.route("/")
+def home():
+    return jsonify({"message": "Hello from Flask on Render!"})
 
+# التشغيل محليًا فقط
 if __name__ == "__main__":
-    set_webhook()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    app.run(host="0.0.0.0", port=5000, debug=True)
