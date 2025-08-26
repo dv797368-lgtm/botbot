@@ -1,51 +1,71 @@
 import os
-import telebot
+import time
+import hmac
+import hashlib
+import requests
 from flask import Flask, request
+import telebot
 
-# 👇 حط التوكن تاعك هنا
-TOKEN = "7473686932:AAEmpKvL4rJyC2aEzyJ3be65eCF2FFdwc6A"
-bot = telebot.TeleBot(TOKEN)
+# ====== متغيرات البيئة ======
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+APP_KEY = os.getenv("ALIEXPRESS_APP_KEY")
+APP_SECRET = os.getenv("ALIEXPRESS_APP_SECRET")
+CURRENCY_CODE = os.getenv("CURRENCY_CODE", "USD")
+SHIP_TO_COUNTRY = os.getenv("SHIP_TO_COUNTRY", "DZ")
 
+bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# ========= أوامر البوت =========
-@bot.message_handler(commands=['start'])
+# ====== دالة توليد التوقيع (signature) ======
+def sign_request(params, secret):
+    sorted_params = sorted(params.items(), key=lambda x: x[0])
+    query = "".join([f"{k}{v}" for k, v in sorted_params])
+    query = secret + query + secret
+    return hashlib.md5(query.encode("utf-8")).hexdigest().upper()
+
+# ====== استعلام API من AliExpress ======
+def get_aliexpress_product(product_id):
+    url = "https://api.taobao.com/router/rest"
+    params = {
+        "method": "aliexpress.affiliate.productdetail.get",
+        "app_key": APP_KEY,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "format": "json",
+        "v": "2.0",
+        "sign_method": "hmac",
+        "product_ids": product_id,
+        "target_currency": CURRENCY_CODE,
+        "target_language": "EN",
+        "ship_to_country": SHIP_TO_COUNTRY
+    }
+    params["sign"] = sign_request(params, APP_SECRET)
+    response = requests.get(url, params=params)
+    return response.json()
+
+# ====== بوت تيليجرام ======
+@bot.message_handler(commands=["start"])
 def send_welcome(message):
-    bot.reply_to(message, "👋 مرحبا! أنا البوت تاعك، اكتب /help باش تعرف الأوامر المتاحة.")
+    bot.reply_to(message, "👋 أهلا بك! ابعث لي ID تاع المنتج من AliExpress باش نرجعلك التفاصيل.")
 
-@bot.message_handler(commands=['help'])
-def send_help(message):
-    help_text = """
-ℹ️ الأوامر المتاحة:
+@bot.message_handler(func=lambda msg: True)
+def handle_message(message):
+    product_id = message.text.strip()
+    if not product_id.isdigit():
+        bot.reply_to(message, "⚠️ من فضلك ابعث ID صالح للمنتج.")
+        return
+    data = get_aliexpress_product(product_id)
+    bot.reply_to(message, str(data))
 
-/start - بدء المحادثة مع البوت
-/help - عرض المساعدة
-اكتب أي رسالة أخرى باش نرجعلك نفس النص
-"""
-    bot.reply_to(message, help_text)
-
-# ========= رد على أي نص آخر =========
-@bot.message_handler(func=lambda message: True)
-def echo_all(message):
-    bot.reply_to(message, f"📩 انت كتبت: {message.text}")
-
-# ========= Webhook =========
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_str = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_str)
-        bot.process_new_updates([update])
-        return "OK", 200
-    else:
-        return "Unsupported Media Type", 415
-
-@app.route('/', methods=['GET'])
+# ====== Flask Webhook ======
+@app.route("/", methods=["POST", "GET"])
 def index():
-    return "بوت شغال ✅", 200
-
+    if request.method == "POST":
+        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+        bot.process_new_updates([update])
+        return "OK", 200   # ✅ مهم: لازم نرجع كود 200
+    return "🤖 البوت شغال!", 200
 
 if __name__ == "__main__":
-    # Render يعطيك PORT تلقائياً
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
+
