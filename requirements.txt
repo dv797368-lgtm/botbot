@@ -1,3 +1,6 @@
-Flask==2.2.5
-pyTelegramBotAPI==4.17.0
-requests==2.31.0
+pyTelegramBotAPI
+python-aliexpress-api
+requests
+Flask
+gunicorn
+```    **ملاحظة هامة:** المكتبة التي نستخدمها اسمها `python-aliexpress-api` وليس `aliexpress_api`.
