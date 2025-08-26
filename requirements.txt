@@ -1,10 +1,4 @@
-
-    pyTelegramBotAPI
-    python-aliexpress-api
-    requests
-    Flask
-    gunicorn
-    ```
-
-
-
+flask
+requests
+gunicorn
+pyTelegramBotAPI
