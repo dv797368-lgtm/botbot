@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# coding: utf-8
+
 import os
 import time
 import hmac
@@ -7,40 +10,57 @@ from flask import Flask, request
 import telebot
 
 # ====== متغيرات البيئة ======
+# **مهم:** تأكد من إعداد هذه المتغيرات على Render
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_KEY = os.getenv("ALIEXPRESS_APP_KEY")
 APP_SECRET = os.getenv("ALIEXPRESS_APP_SECRET")
 CURRENCY_CODE = os.getenv("CURRENCY_CODE", "USD")
 SHIP_TO_COUNTRY = os.getenv("SHIP_TO_COUNTRY", "DZ")
 
+# --- تهيئة البوت وتطبيق Flask ---
+# التحقق من وجود التوكن
+if not BOT_TOKEN:
+    print("!!! FATAL ERROR: BOT_TOKEN not found in environment variables.")
+    # لا نستخدم exit() للسماح للخادم بالعمل، لكنه لن يعمل بدون توكن
+    
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
 # ====== دالة توليد التوقيع (signature) ======
 def sign_request(params, secret):
-    sorted_params = sorted(params.items(), key=lambda x: x[0])  # ترتيب البارامترات
+    sorted_params = sorted(params.items(), key=lambda x: x[0])
     query = "".join([f"{k}{v}" for k, v in sorted_params])
-    query = secret + query + secret
-    return hmac.new(secret.encode("utf-8"), query.encode("utf-8"), hashlib.md5).hexdigest().upper()
+    # الترتيب الصحيح هو secret + query + secret (أو فقط secret + query حسب توثيق الـ API)
+    # لنفترض أن secret + query + secret هو الصحيح بناءً على الكود الأصلي
+    query_to_sign = secret + query + secret
+    return hmac.new(secret.encode("utf-8"), query_to_sign.encode("utf-8"), hashlib.md5).hexdigest().upper()
 
 # ====== استعلام API من AliExpress ======
 def get_aliexpress_product(product_id):
-    url = "https://api.taobao.com/router/rest"
+    url = "https://api-sg.aliexpress.com/sync" # استخدام نقطة النهاية الموصى بها
     params = {
         "method": "aliexpress.affiliate.productdetail.get",
         "app_key": APP_KEY,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": str(int(time.time() * 1000)), # التوقيت بالمللي ثانية كنص
         "format": "json",
         "v": "2.0",
         "sign_method": "hmac",
         "product_ids": product_id,
         "target_currency": CURRENCY_CODE,
         "target_language": "EN",
-        "ship_to_country": SHIP_TO_COUNTRY
+        "ship_to_country": SHIP_TO_COUNTRY,
+        "tracking_id": "default" # معرّف التتبع مطلوب
     }
+    # إعادة ترتيب البارامترات قبل التوقيع
     params["sign"] = sign_request(params, APP_SECRET)
-    response = requests.get(url, params=params)
-    return response.json()
+    
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status() # التأكد من عدم وجود أخطاء HTTP
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error making API request: {e}")
+        return {"error": str(e)}
 
 # ====== بوت تيليجرام ======
 @bot.message_handler(commands=["start"])
@@ -53,17 +73,37 @@ def handle_message(message):
     if not product_id.isdigit():
         bot.reply_to(message, "⚠️ من فضلك ابعث ID صالح للمنتج.")
         return
+    
+    # إرسال رسالة انتظار
+    processing_msg = bot.reply_to(message, "⏳ جاري جلب التفاصيل...")
+    
     data = get_aliexpress_product(product_id)
-    bot.reply_to(message, str(data))
+    
+    # **هنا ستحتاج إلى إضافة منطق تحليل البيانات**
+    # حاليًا، سيتم طباعة الـ JSON الخام
+    
+    # تحويل الـ JSON إلى نص منسق لسهولة القراءة
+    formatted_data = json.dumps(data, indent=2, ensure_ascii=False)
+    
+    # حذف رسالة الانتظار وإرسال النتيجة
+    bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
+    bot.reply_to(message, f"```json\n{formatted_data}\n```", parse_mode="MarkdownV2")
+
 
 # ====== Flask Webhook ======
-@app.route("/", methods=["POST", "GET"])
-def index():
-    if request.method == "POST":
-        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def process_updates():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
         bot.process_new_updates([update])
-        return "OK", 200   # ✅ مهم: لازم نرجع كود 200
+        return '', 200
+    else:
+        return 'Forbidden', 403
+
+@app.route('/')
+def index():
     return "🤖 البوت شغال!", 200
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+# **تم حذف كتلة if __name__ == "__main__"**
+# سيقوم Gunicorn بتشغيل متغير 'app' مباشرة
