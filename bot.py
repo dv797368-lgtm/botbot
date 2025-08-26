@@ -10,7 +10,6 @@ from flask import Flask, request
 import telebot
 
 # ====== متغيرات البيئة ======
-# **مهم:** تأكد من إعداد هذه المتغيرات على Render
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_KEY = os.getenv("ALIEXPRESS_APP_KEY")
 APP_SECRET = os.getenv("ALIEXPRESS_APP_SECRET")
@@ -18,7 +17,6 @@ CURRENCY_CODE = os.getenv("CURRENCY_CODE", "USD")
 SHIP_TO_COUNTRY = os.getenv("SHIP_TO_COUNTRY", "DZ")
 
 # --- تهيئة البوت وتطبيق Flask ---
-# التحقق من وجود التوكن
 if not BOT_TOKEN:
     print("!!! FATAL ERROR: BOT_TOKEN not found in environment variables.")
     # لا نستخدم exit() للسماح للخادم بالعمل، لكنه لن يعمل بدون توكن
@@ -30,18 +28,16 @@ app = Flask(__name__)
 def sign_request(params, secret):
     sorted_params = sorted(params.items(), key=lambda x: x[0])
     query = "".join([f"{k}{v}" for k, v in sorted_params])
-    # الترتيب الصحيح هو secret + query + secret (أو فقط secret + query حسب توثيق الـ API)
-    # لنفترض أن secret + query + secret هو الصحيح بناءً على الكود الأصلي
     query_to_sign = secret + query + secret
     return hmac.new(secret.encode("utf-8"), query_to_sign.encode("utf-8"), hashlib.md5).hexdigest().upper()
 
 # ====== استعلام API من AliExpress ======
 def get_aliexpress_product(product_id):
-    url = "https://api-sg.aliexpress.com/sync" # استخدام نقطة النهاية الموصى بها
+    url = "https://api-sg.aliexpress.com/sync"
     params = {
         "method": "aliexpress.affiliate.productdetail.get",
         "app_key": APP_KEY,
-        "timestamp": str(int(time.time() * 1000)), # التوقيت بالمللي ثانية كنص
+        "timestamp": str(int(time.time() * 1000)),
         "format": "json",
         "v": "2.0",
         "sign_method": "hmac",
@@ -49,14 +45,13 @@ def get_aliexpress_product(product_id):
         "target_currency": CURRENCY_CODE,
         "target_language": "EN",
         "ship_to_country": SHIP_TO_COUNTRY,
-        "tracking_id": "default" # معرّف التتبع مطلوب
+        "tracking_id": "default"
     }
-    # إعادة ترتيب البارامترات قبل التوقيع
     params["sign"] = sign_request(params, APP_SECRET)
     
     try:
         response = requests.get(url, params=params)
-        response.raise_for_status() # التأكد من عدم وجود أخطاء HTTP
+        response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"Error making API request: {e}")
@@ -74,23 +69,16 @@ def handle_message(message):
         bot.reply_to(message, "⚠️ من فضلك ابعث ID صالح للمنتج.")
         return
     
-    # إرسال رسالة انتظار
-    processing_msg = bot.reply_to(message, "⏳ جاري جلب التفاصيل...")
-    
     data = get_aliexpress_product(product_id)
-    
-    # **هنا ستحتاج إلى إضافة منطق تحليل البيانات**
-    # حاليًا، سيتم طباعة الـ JSON الخام
     
     # تحويل الـ JSON إلى نص منسق لسهولة القراءة
     formatted_data = json.dumps(data, indent=2, ensure_ascii=False)
     
-    # حذف رسالة الانتظار وإرسال النتيجة
-    bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
+    # إرسال النتيجة
     bot.reply_to(message, f"```json\n{formatted_data}\n```", parse_mode="MarkdownV2")
 
-
 # ====== Flask Webhook ======
+# هذا المسار هو الذي سيستقبل التحديثات من تليجرام
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def process_updates():
     if request.headers.get('content-type') == 'application/json':
@@ -101,9 +89,10 @@ def process_updates():
     else:
         return 'Forbidden', 403
 
+# هذا المسار يستخدمه Render للتأكد من أن التطبيق يعمل
 @app.route('/')
 def index():
     return "🤖 البوت شغال!", 200
 
-# **تم حذف كتلة if __name__ == "__main__"**
-# سيقوم Gunicorn بتشغيل متغير 'app' مباشرة
+# **تم حذف جميع الأكواد التي تعمل عند التشغيل المباشر**
+# Gunicorn هو المسؤول عن تشغيل 'app'
