@@ -1,5 +1,6 @@
 import os
 import time
+import hmac
 import hashlib
 import requests
 from flask import Flask, request
@@ -17,10 +18,10 @@ app = Flask(__name__)
 
 # ====== دالة توليد التوقيع (signature) ======
 def sign_request(params, secret):
-    sorted_params = sorted(params.items(), key=lambda x: x[0])  # ترتيب بارامترات
+    sorted_params = sorted(params.items(), key=lambda x: x[0])  # ترتيب البارامترات
     query = "".join([f"{k}{v}" for k, v in sorted_params])
     query = secret + query + secret
-    return hashlib.md5(query.encode("utf-8")).hexdigest().upper()
+    return hmac.new(secret.encode("utf-8"), query.encode("utf-8"), hashlib.md5).hexdigest().upper()
 
 # ====== استعلام API من AliExpress ======
 def get_aliexpress_product(product_id):
@@ -31,7 +32,7 @@ def get_aliexpress_product(product_id):
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "format": "json",
         "v": "2.0",
-        "sign_method": "md5",
+        "sign_method": "hmac",
         "product_ids": product_id,
         "target_currency": CURRENCY_CODE,
         "target_language": "EN",
@@ -50,36 +51,30 @@ def send_welcome(message):
 def handle_message(message):
     product_id = message.text.strip()
     if not product_id.isdigit():
-        bot.reply_to(message, "⚠️ من فضلك ابعث ID صالح للمنتج (أرقام فقط).")
+        bot.reply_to(message, "⚠️ من فضلك ابعث ID صالح للمنتج.")
         return
-
     data = get_aliexpress_product(product_id)
-
-    try:
-        product = data["aliexpress_affiliate_productdetail_get_response"]["result"]["products"][0]
-        title = product.get("product_title", "بدون عنوان")
-        url = product.get("promotion_link", "❌ ماكانش رابط")
-        price = product.get("target_sale_price", "❌ ماكانش سعر")
-
-        reply = f"📦 {title}\n💰 السعر: {price} {CURRENCY_CODE}\n🔗 الرابط: {url}"
-    except Exception as e:
-        reply = f"❌ ماقدرتش نجيب التفاصيل.\nالرد من API:\n{data}"
-
-    bot.reply_to(message, reply)
+    bot.reply_to(message, str(data))
 
 # ====== Flask Webhook ======
 @app.route("/", methods=["POST", "GET"])
-@app.route("/webhook", methods=["POST", "GET"])   # ✅ أضفنا المسار /webhook
+@app.route("/webhook", methods=["POST", "GET"])
 def index():
     if request.method == "POST":
         update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
         bot.process_new_updates([update])
-        return "OK", 200   # لازم يرجع 200
+        return "OK", 200   # ✅ مهم: لازم نرجع كود 200
     return "🤖 البوت شغال!", 200
 
+# ====== ضبط Webhook أوتوماتيكياً ======
+WEBHOOK_URL = f"https://botbot-ii4z.onrender.com/webhook"
+
+def set_webhook():
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
+    resp = requests.post(url, data={"url": WEBHOOK_URL})
+    print("Webhook setup:", resp.text)
+
+set_webhook()
 
 if __name__ == "__main__":
-    # ✅ Render يفرض PORT في متغير البيئة
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
+    app.run(host="0.0.0.0", port=10000)
