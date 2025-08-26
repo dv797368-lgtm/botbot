@@ -1,215 +1,69 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-import telebot
-from telebot import types
-from aliexpress_api import AliexpressApi, models
-import re
-import requests
-import json
-from urllib.parse import quote
-import traceback
-from datetime import datetime
 import os
-from flask import Flask, request
 import time
-import logging
+import hmac
+import hashlib
+import requests
+from flask import Flask, request
+import telebot
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# --- Configuration Settings from Environment Variables ---
+# ====== متغيرات البيئة ======
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ALIEXPRESS_APP_KEY = os.getenv("ALIEXPRESS_APP_KEY")
-ALIEXPRESS_APP_SECRET = os.getenv("ALIEXPRESS_APP_SECRET")
+APP_KEY = os.getenv("ALIEXPRESS_APP_KEY")
+APP_SECRET = os.getenv("ALIEXPRESS_APP_SECRET")
 CURRENCY_CODE = os.getenv("CURRENCY_CODE", "USD")
 SHIP_TO_COUNTRY = os.getenv("SHIP_TO_COUNTRY", "DZ")
 
-if not all([BOT_TOKEN, ALIEXPRESS_APP_KEY, ALIEXPRESS_APP_SECRET]):
-    logger.error("Missing required environment variables")
-    exit()
-
-# --- Bot Initialization ---
 bot = telebot.TeleBot(BOT_TOKEN)
-aliexpress = AliexpressApi(
-    ALIEXPRESS_APP_KEY, 
-    ALIEXPRESS_APP_SECRET,
-    models.Language.AR, 
-    CURRENCY_CODE, 
-    'default',
-    ship_to_country=SHIP_TO_COUNTRY
-)
-
-# --- Flask App for Webhook ---
 app = Flask(__name__)
 
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def process_updates():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return ''
-    else:
-        return 'Forbidden', 403
+# ====== دالة توليد التوقيع (signature) ======
+def sign_request(params, secret):
+    sorted_params = sorted(params.items(), key=lambda x: x[0])  # ترتيب البارامترات
+    query = "".join([f"{k}{v}" for k, v in sorted_params])
+    query = secret + query + secret
+    return hmac.new(secret.encode("utf-8"), query.encode("utf-8"), hashlib.md5).hexdigest().upper()
 
-@app.route('/')
-def index():
-    return "Bot is running!", 200
+# ====== استعلام API من AliExpress ======
+def get_aliexpress_product(product_id):
+    url = "https://api.taobao.com/router/rest"
+    params = {
+        "method": "aliexpress.affiliate.productdetail.get",
+        "app_key": APP_KEY,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "format": "json",
+        "v": "2.0",
+        "sign_method": "hmac",
+        "product_ids": product_id,
+        "target_currency": CURRENCY_CODE,
+        "target_language": "EN",
+        "ship_to_country": SHIP_TO_COUNTRY
+    }
+    params["sign"] = sign_request(params, APP_SECRET)
+    response = requests.get(url, params=params)
+    return response.json()
 
-# --- Keyboard Definitions ---
-def create_keyboards():
-    keyboard_start = types.InlineKeyboardMarkup(row_width=1)
-    btn_discount = types.InlineKeyboardButton("⭐️ تخفيض العملات على منتجات السلة 🛒 ⭐️", callback_data='click')
-    keyboard_start.add(btn_discount)
+# ====== بوت تيليجرام ======
+@bot.message_handler(commands=["start"])
+def send_welcome(message):
+    bot.reply_to(message, "👋 أهلا بك! ابعث لي ID تاع المنتج من AliExpress باش نرجعلك التفاصيل.")
 
-    keyboard_offers = types.InlineKeyboardMarkup(row_width=1)
-    btn_channel = types.InlineKeyboardButton("✨ اشترك في قناتنا لأقوى العروض ✨", url="https://t.me/bestpromo0")
-    keyboard_offers.add(btn_channel)
-    return keyboard_start, keyboard_offers
-
-KEYBOARD_START, KEYBOARD_OFFERS = create_keyboards()
-
-# --- Utility Functions ---
-def escape_markdown_v2(text: str) -> str:
-    if not text: return ""
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return ''.join('\\' + char if char in escape_chars else char for char in str(text))
-    
-def extract_product_id_from_url(url: str) -> str:
-    try:
-        final_url = url
-        if ("a.aliexpress.com" in url or "s.click.aliexpress.com" in url) and "aff_fcid=" not in url:
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(url, headers=headers, allow_redirects=True, timeout=15)
-            final_url = response.url
-        patterns = [r'/item/(\d{8,})\.html', r'/i/(\d{8,})\.html', r'productId=(\d{8,})', r'id=(\d{8,})']
-        for pattern in patterns:
-            match = re.search(pattern, final_url)
-            if match: return match.group(1)
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting product ID: {e}")
-        return None
-
-def get_product_details(product_id: str) -> dict:
-    try:
-        details = aliexpress.get_products_details([product_id])
-        if details:
-            product = details[0]
-            return {
-                'title': product.product_title,
-                'price': getattr(product, 'promotion_price', None) or getattr(product, 'target_sale_price', None),
-                'image_url': product.product_main_image_url,
-                'store_name': getattr(product, 'store_name', 'غير متوفر'),
-                'rating': getattr(product, 'positive_feedback_rate', 'غير متوفر'),
-                'coin_discount_rate': getattr(product, 'coin_discount_rate', 0) / 100.0
-            }
-    except Exception as e:
-        logger.error(f"API Error: {e}")
-    return None
-
-def safe_get_affiliate_link(link: str) -> str:
-    try:
-        response = aliexpress.get_affiliate_links([link])
-        if response and hasattr(response[0], 'promotion_link'):
-            return response[0].promotion_link
-        return "تعذر إنشاء الرابط"
-    except Exception as e:
-        logger.error(f"Error getting affiliate link: {e}")
-        return "تعذر إنشاء الرابط"
-
-def extract_link(text: str) -> str:
-    link_pattern = r'https?://[a-zA-Z0-9.-]*aliexpress\.[a-zA-Z0-9./_?=&-]+'
-    links = re.findall(link_pattern, text)
-    return links[0] if links else None
-
-# --- Message Handlers ---
-@bot.message_handler(commands=['start', 'help'])
-def welcome_user(message):
-    welcome_text = "مرحباً بك! أرسل لي أي رابط منتج من AliExpress وسأبحث لك عن أفضل العروض\\."
-    bot.send_message(message.chat.id, welcome_text, reply_markup=KEYBOARD_START, parse_mode='MarkdownV2')
-
-@bot.callback_query_handler(func=lambda call: call.data == 'click')
-def handle_callbacks(callback_query):
-    bot.answer_callback_query(callback_query.id)
-    help_text = "لحل مشكلة التخفيض بالعملات، تأكد من تسجيل الدخول لحسابك ووجود عملات كافية\\."
-    bot.send_message(callback_query.message.chat.id, help_text, reply_markup=KEYBOARD_START, parse_mode='MarkdownV2')
-
-@bot.message_handler(func=lambda message: True)
-def handle_all_messages(message):
-    link = extract_link(message.text)
-    if not link:
-        bot.send_message(message.chat.id, "لم أجد رابطًا في رسالتك\\. يرجى إرسال رابط صحيح\\.", reply_markup=KEYBOARD_START, parse_mode='MarkdownV2')
+@bot.message_handler(func=lambda msg: True)
+def handle_message(message):
+    product_id = message.text.strip()
+    if not product_id.isdigit():
+        bot.reply_to(message, "⚠️ من فضلك ابعث ID صالح للمنتج.")
         return
+    data = get_aliexpress_product(product_id)
+    bot.reply_to(message, str(data))
 
-    processing_msg = bot.send_message(message.chat.id, f'جاري البحث عن أفضل العروض لـ{SHIP_TO_COUNTRY}... ⏳')
-    try:
-        product_id = extract_product_id_from_url(link)
-        if not product_id:
-            bot.edit_message_text("❌ لم أتمكن من استخراج معرّف المنتج\\.", chat_id=message.chat.id, message_id=processing_msg.message_id, parse_mode='MarkdownV2')
-            return
+# ====== Flask Webhook ======
+@app.route("/", methods=["POST", "GET"])
+def index():
+    if request.method == "POST":
+        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+        bot.process_new_updates([update])
+        return "OK", 200   # ✅ مهم: لازم نرجع كود 200
+    return "🤖 البوت شغال!", 200
 
-        product_info = get_product_details(product_id)
-        if not product_info:
-            bot.edit_message_text("❌ لم أتمكن من جلب تفاصيل المنتج\\.", chat_id=message.chat.id, message_id=processing_msg.message_id, parse_mode='MarkdownV2')
-            return
-
-        encoded_link = quote(link, safe='')
-        coins_link = safe_get_affiliate_link(f'https://star.aliexpress.com/share/share.htm?platform=AE&businessType=ProductDetail&redirectUrl={encoded_link}?sourceType=620')
-        super_link = safe_get_affiliate_link(f'https://star.aliexpress.com/share/share.htm?platform=AE&businessType=ProductDetail&redirectUrl={encoded_link}?sourceType=562')
-        coins_hub_link = "https://s.click.aliexpress.com/e/_oBs9DwX"
-
-        estimated_text = ""
-        if product_info['coin_discount_rate'] > 0 and product_info['price']:
-            try:
-                price_float = float(product_info['price'])
-                estimated_price = price_float * (1 - product_info['coin_discount_rate'])
-                estimated_text = f"\n💎 *السعر بالعملات قد يصل إلى*: *{estimated_price:.2f} {CURRENCY_CODE}*"
-            except Exception as e:
-                logger.error(f"Error calculating estimated price: {e}")
-        
-        rating_display = f"{product_info['rating']}%" if str(product_info['rating']).replace('.', '', 1).isdigit() else product_info['rating']
-
-        caption = (f"📌 *{escape_markdown_v2(product_info['title'])}*\n\n"
-                   f"💰 *أفضل سعر*: *{escape_markdown_v2(str(product_info['price']))} {escape_markdown_v2(CURRENCY_CODE)}*"
-                   f"{escape_markdown_v2(estimated_text)}\n\n"
-                   f"⭐️ *شراء المنتج بخصم العملات*:\n{escape_markdown_v2(coins_link)}\n\n"
-                   f"🔗 *رابط عرض BIG SAVE*:\n{escape_markdown_v2(super_link)}\n\n"
-                   f"💰 *مركز العملات* \\(اجمع عملاتك من هنا\\):\n{escape_markdown_v2(coins_hub_link)}\n\n"
-                   f"\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\n"
-                   f"🛍️ *المتجر*: {escape_markdown_v2(product_info['store_name'])}\n"
-                   f"📊 *التقييم*: {escape_markdown_v2(rating_display)}\n\n"
-                   f"⚠️ *ملاحظة*: الاسعار تقديرية السعر النهائي بعد التخفيض يظهر عند الدفع\\.")
-
-        bot.delete_message(message.chat.id, processing_msg.message_id)
-        bot.send_photo(message.chat.id, product_info['image_url'], caption=caption, reply_markup=KEYBOARD_OFFERS, parse_mode='MarkdownV2')
-
-    except Exception as e:
-        logger.error(f"Error processing link: {e}")
-        traceback.print_exc()
-        bot.edit_message_text("❌ حدث خطأ أثناء معالجة الرابط\\. حاول مرة أخرى\\.", chat_id=message.chat.id, message_id=processing_msg.message_id, parse_mode='MarkdownV2')
-
-# --- Set Webhook ---
-def set_webhook():
-    RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") 
-    if RENDER_URL:
-        WEBHOOK_URL = f"{RENDER_URL}/{BOT_TOKEN}"
-        try:
-            bot.remove_webhook()
-            time.sleep(1)
-            bot.set_webhook(url=WEBHOOK_URL)
-            logger.info(f"Webhook set to {WEBHOOK_URL}")
-        except Exception as e:
-            logger.error(f"Error setting webhook: {e}")
-    else:
-        logger.error("Could not set webhook: RENDER_EXTERNAL_URL environment variable not found.")
-
-# Set webhook when app starts
-set_webhook()
-
-if __name__ == '__main__':
-    # For local development without webhook
-    bot.remove_webhook()
-    bot.polling()
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
