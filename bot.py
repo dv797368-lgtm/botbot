@@ -59,25 +59,17 @@ def handle_message(message):
     except Exception as e:
         bot.reply_to(message, f"❌ صار خطأ: {e}")
 
-# ====== Flask Webhook ======
-@app.route("/", methods=["POST"])
-def webhook():
-    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "OK", 200   # ✅ لازم يرجع 200 للـ Telegram
-
-@app.route("/")
+# ====== Flask Routes ======
+@app.route("/", methods=["GET"])
 def home():
-    return jsonify({"message": "Hello from Flask on Render!"})
+    return jsonify({"message": "🤖 البوت شغال على Render/محلي!"})
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.json
-    # هنا ضع منطق البوت الخاص بك
-    return jsonify({"status": "received", "data": data})
+    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+    bot.process_new_updates([update])
+    return "OK", 200   # ✅ Telegram لازم ياخذ 200
 
-# التشغيل محليًا فقط
+# ====== التشغيل محليًا ======
 if __name__ == "__main__":
-    # محلي: يشتغل على 5000 افتراضيًا
     app.run(host="0.0.0.0", port=5000, debug=True)
-
