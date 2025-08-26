@@ -45,7 +45,7 @@ def get_aliexpress_product(product_id):
 # ====== بوت تيليجرام ======
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
-    bot.reply_to(message, "👋 أهلا بك! ابعث لي ID تاع المنتج من AliExpress باش نرجعلك التفاصيل.")
+    bot.reply_to(message, "👋 أهلا! ابعث لي ID تاع المنتج من AliExpress باش نرجعلك التفاصيل.")
 
 @bot.message_handler(func=lambda msg: True)
 def handle_message(message):
@@ -53,17 +53,23 @@ def handle_message(message):
     if not product_id.isdigit():
         bot.reply_to(message, "⚠️ من فضلك ابعث ID صالح للمنتج.")
         return
-    data = get_aliexpress_product(product_id)
-    bot.reply_to(message, str(data))
+    try:
+        data = get_aliexpress_product(product_id)
+        bot.reply_to(message, str(data))
+    except Exception as e:
+        bot.reply_to(message, f"❌ صار خطأ: {e}")
 
 # ====== Flask Webhook ======
-@app.route("/", methods=["POST", "GET"])
-def index():
-    if request.method == "POST":
-        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
-        bot.process_new_updates([update])
-        return "OK", 200   # ✅ مهم: لازم نرجع كود 200
+@app.route("/", methods=["POST"])
+def webhook():
+    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+    bot.process_new_updates([update])
+    return "OK", 200   # ✅ لازم يرجع 200 للـ Telegram
+
+@app.route("/ping", methods=["GET"])
+def ping():
     return "🤖 البوت شغال!", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=por
