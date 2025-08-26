@@ -13,15 +13,12 @@ APP_SECRET = os.getenv("ALIEXPRESS_APP_SECRET")
 CURRENCY_CODE = os.getenv("CURRENCY_CODE", "USD")
 SHIP_TO_COUNTRY = os.getenv("SHIP_TO_COUNTRY", "DZ")
 
-if not BOT_TOKEN:
-    raise Exception("❌ BOT_TOKEN غير موجود في Environment Variables!")
-
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
 # ====== دالة توليد التوقيع (signature) ======
 def sign_request(params, secret):
-    sorted_params = sorted(params.items(), key=lambda x: x[0])
+    sorted_params = sorted(params.items(), key=lambda x: x[0])  # ترتيب البارامترات
     query = "".join([f"{k}{v}" for k, v in sorted_params])
     query = secret + query + secret
     return hmac.new(secret.encode("utf-8"), query.encode("utf-8"), hashlib.md5).hexdigest().upper()
@@ -60,21 +57,13 @@ def handle_message(message):
     bot.reply_to(message, str(data))
 
 # ====== Flask Webhook ======
-@app.route("/", methods=["GET"])
-def home():
-    return "🤖 البوت شغال!"
+@app.route("/", methods=["POST", "GET"])
+def index():
+    if request.method == "POST":
+        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+        bot.process_new_updates([update])
+        return "OK", 200   # ✅ مهم: لازم نرجع كود 200
+    return "🤖 البوت شغال!", 200
 
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "OK"
-
-# ====== تشغيل السيرفر ======
 if __name__ == "__main__":
-    # ضبط الـ Webhook عند الإقلاع
-    RENDER_URL = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{BOT_TOKEN}"
-    requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={RENDER_URL}")
-
-    port = int(os.getenv("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
