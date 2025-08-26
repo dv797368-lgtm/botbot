@@ -69,14 +69,17 @@ def handle_message(message):
 
 # ====== Flask Webhook ======
 @app.route("/", methods=["POST", "GET"])
+@app.route("/webhook", methods=["POST", "GET"])   # ✅ أضفنا المسار /webhook
 def index():
     if request.method == "POST":
         update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
         bot.process_new_updates([update])
-        return "OK", 200   # ✅ مهم: لازم نرجع كود 200
+        return "OK", 200   # لازم يرجع 200
     return "🤖 البوت شغال!", 200
+
 
 if __name__ == "__main__":
     # ✅ Render يفرض PORT في متغير البيئة
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
