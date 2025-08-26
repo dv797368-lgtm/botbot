@@ -3,7 +3,7 @@ import time
 import hmac
 import hashlib
 import requests
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import telebot
 
 # ====== متغيرات البيئة ======
@@ -66,10 +66,18 @@ def webhook():
     bot.process_new_updates([update])
     return "OK", 200   # ✅ لازم يرجع 200 للـ Telegram
 
-@app.route("/ping", methods=["GET"])
-def ping():
-    return "🤖 البوت شغال!", 200
+@app.route("/")
+def home():
+    return jsonify({"message": "Hello from Flask on Render!"})
 
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.json
+    # هنا ضع منطق البوت الخاص بك
+    return jsonify({"status": "received", "data": data})
+
+# التشغيل محليًا فقط
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=por
+    # محلي: يشتغل على 5000 افتراضيًا
+    app.run(host="0.0.0.0", port=5000, debug=True)
+
