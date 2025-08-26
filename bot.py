@@ -13,19 +13,24 @@ from datetime import datetime
 import os
 from flask import Flask, request
 import time
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- Configuration Settings from Environment Variables ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALIEXPRESS_APP_KEY = os.getenv("ALIEXPRESS_APP_KEY")
 ALIEXPRESS_APP_SECRET = os.getenv("ALIEXPRESS_APP_SECRET")
 CURRENCY_CODE = os.getenv("CURRENCY_CODE", "USD")
-SHIP_TO_COUNTRY = os.getenv("SHIP_TO_COUNTRY", "DZ") # تم التحديث إلى الجزائر بناءً على الكود الجديد
+SHIP_TO_COUNTRY = os.getenv("SHIP_TO_COUNTRY", "DZ")
 
-# --- Bot Initialization ---
-if not BOT_TOKEN:
-    print("!!! FATAL ERROR: BOT_TOKEN not found in environment variables.")
+if not all([BOT_TOKEN, ALIEXPRESS_APP_KEY, ALIEXPRESS_APP_SECRET]):
+    logger.error("Missing required environment variables")
     exit()
 
+# --- Bot Initialization ---
 bot = telebot.TeleBot(BOT_TOKEN)
 aliexpress = AliexpressApi(
     ALIEXPRESS_APP_KEY, 
@@ -84,23 +89,36 @@ def extract_product_id_from_url(url: str) -> str:
             match = re.search(pattern, final_url)
             if match: return match.group(1)
         return None
-    except Exception: return None
+    except Exception as e:
+        logger.error(f"Error extracting product ID: {e}")
+        return None
 
 def get_product_details(product_id: str) -> dict:
     try:
         details = aliexpress.get_products_details([product_id])
         if details:
             product = details[0]
-            return {'title': product.product_title,'price': getattr(product, 'promotion_price', None) or getattr(product, 'target_sale_price', None),'image_url': product.product_main_image_url,'store_name': getattr(product, 'store_name', 'غير متوفر'),'rating': getattr(product, 'positive_feedback_rate', 'غير متوفر'),'coin_discount_rate': getattr(product, 'coin_discount_rate', 0) / 100.0}
-    except Exception as e: print(f"[API_ERROR] {e}.")
+            return {
+                'title': product.product_title,
+                'price': getattr(product, 'promotion_price', None) or getattr(product, 'target_sale_price', None),
+                'image_url': product.product_main_image_url,
+                'store_name': getattr(product, 'store_name', 'غير متوفر'),
+                'rating': getattr(product, 'positive_feedback_rate', 'غير متوفر'),
+                'coin_discount_rate': getattr(product, 'coin_discount_rate', 0) / 100.0
+            }
+    except Exception as e:
+        logger.error(f"API Error: {e}")
     return None
 
 def safe_get_affiliate_link(link: str) -> str:
     try:
         response = aliexpress.get_affiliate_links([link])
-        if response and hasattr(response[0], 'promotion_link'): return response[0].promotion_link
+        if response and hasattr(response[0], 'promotion_link'):
+            return response[0].promotion_link
         return "تعذر إنشاء الرابط"
-    except Exception: return "تعذر إنشاء الرابط"
+    except Exception as e:
+        logger.error(f"Error getting affiliate link: {e}")
+        return "تعذر إنشاء الرابط"
 
 def extract_link(text: str) -> str:
     link_pattern = r'https?://[a-zA-Z0-9.-]*aliexpress\.[a-zA-Z0-9./_?=&-]+'
@@ -149,7 +167,8 @@ def handle_all_messages(message):
                 price_float = float(product_info['price'])
                 estimated_price = price_float * (1 - product_info['coin_discount_rate'])
                 estimated_text = f"\n💎 *السعر بالعملات قد يصل إلى*: *{estimated_price:.2f} {CURRENCY_CODE}*"
-            except: pass
+            except Exception as e:
+                logger.error(f"Error calculating estimated price: {e}")
         
         rating_display = f"{product_info['rating']}%" if str(product_info['rating']).replace('.', '', 1).isdigit() else product_info['rating']
 
@@ -168,25 +187,29 @@ def handle_all_messages(message):
         bot.send_photo(message.chat.id, product_info['image_url'], caption=caption, reply_markup=KEYBOARD_OFFERS, parse_mode='MarkdownV2')
 
     except Exception as e:
-        print(f"Error processing link: {e}")
+        logger.error(f"Error processing link: {e}")
         traceback.print_exc()
         bot.edit_message_text("❌ حدث خطأ أثناء معالجة الرابط\\. حاول مرة أخرى\\.", chat_id=message.chat.id, message_id=processing_msg.message_id, parse_mode='MarkdownV2')
 
-# --- Set Webhook (Run this once when you deploy or change the URL) ---
+# --- Set Webhook ---
 def set_webhook():
-    # يجب أن تحصل على هذا الرابط من لوحة تحكم Render
-    # مثال: https://your-bot-name.onrender.com
     RENDER_URL = os.getenv("RENDER_EXTERNAL_URL") 
     if RENDER_URL:
         WEBHOOK_URL = f"{RENDER_URL}/{BOT_TOKEN}"
-        bot.remove_webhook()
-        time.sleep(1)
-        bot.set_webhook(url=WEBHOOK_URL)
-        print(f"Webhook set to {WEBHOOK_URL}")
+        try:
+            bot.remove_webhook()
+            time.sleep(1)
+            bot.set_webhook(url=WEBHOOK_URL)
+            logger.info(f"Webhook set to {WEBHOOK_URL}")
+        except Exception as e:
+            logger.error(f"Error setting webhook: {e}")
     else:
-        print("Could not set webhook: RENDER_EXTERNAL_URL environment variable not found.")
+        logger.error("Could not set webhook: RENDER_EXTERNAL_URL environment variable not found.")
 
-# The Flask app is run by the Gunicorn server configured in Render
-# We only set the webhook when the app starts
-if __name__ == 'main_for_webhook':
-    set_webhook()
+# Set webhook when app starts
+set_webhook()
+
+if __name__ == '__main__':
+    # For local development without webhook
+    bot.remove_webhook()
+    bot.polling()
